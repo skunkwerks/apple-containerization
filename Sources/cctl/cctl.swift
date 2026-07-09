@@ -66,6 +66,7 @@ struct Application: AsyncParsableCommand {
                 Rootfs.self,
                 Images.self,
                 Run.self,
+                RunFreeBSD.self,
             ]
             #if os(macOS)
             commands.append(Login.self)

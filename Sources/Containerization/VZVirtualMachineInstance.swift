@@ -86,6 +86,15 @@ public final class VZVirtualMachineInstance: Sendable {
         /// Extension objects that participate in the VM instance lifecycle.
         public var extensions: [any Sendable] = []
 
+        /// When set, boot via EFI using this variable store (created if absent)
+        /// instead of a host-supplied Linux kernel + command line. Used for guests
+        /// that boot their own loader from disk, e.g. FreeBSD.
+        public var efiVariableStore: URL? = nil
+
+        /// Whether to dial the in-guest Linux agent (vminitd over vsock) on start.
+        /// Set false for guests without vminitd, e.g. a boot-only FreeBSD VM.
+        public var dialsAgent: Bool = true
+
         public init() {
             self.cpus = 4
             self.memoryInBytes = 1024.mib()
@@ -191,6 +200,12 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
 
             try await self.vm.start(queue: self.queue)
 
+            // Guests without an in-guest vminitd (e.g. boot-only FreeBSD) skip the
+            // agent dial and time sync entirely.
+            guard self.config.dialsAgent else {
+                return
+            }
+
             let agent = try await Vminitd(
                 connection: try await self.vm.waitForAgent(queue: self.queue),
                 group: self.group
@@ -221,7 +236,9 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
                 throw ContainerizationError(.invalidState, message: "vm is not running")
             }
 
-            try await self.timeSyncer.close()
+            if self.config.dialsAgent {
+                try await self.timeSyncer.close()
+            }
 
             if self.ownsGroup {
                 try await self.group.shutdownGracefully()
@@ -461,17 +478,28 @@ extension VZVirtualMachineInstance.Configuration {
             #endif
         }
 
-        guard let kernel = self.kernel else {
-            throw ContainerizationError(.invalidArgument, message: "kernel cannot be nil")
-        }
-
         guard let initialFilesystem = self.initialFilesystem else {
             throw ContainerizationError(.invalidArgument, message: "rootfs cannot be nil")
         }
 
-        let loader = VZLinuxBootLoader(kernelURL: kernel.path)
-        loader.commandLine = kernel.linuxCommandline(initialFilesystem: initialFilesystem)
-        config.bootLoader = loader
+        if let efiVariableStore = self.efiVariableStore {
+            // EFI boot: the guest boots its own loader from disk (e.g. FreeBSD).
+            // No host-supplied kernel or Linux command line.
+            let loader = VZEFIBootLoader()
+            if FileManager.default.fileExists(atPath: efiVariableStore.path) {
+                loader.variableStore = VZEFIVariableStore(url: efiVariableStore)
+            } else {
+                loader.variableStore = try VZEFIVariableStore(creatingVariableStoreAt: efiVariableStore)
+            }
+            config.bootLoader = loader
+        } else {
+            guard let kernel = self.kernel else {
+                throw ContainerizationError(.invalidArgument, message: "kernel cannot be nil")
+            }
+            let loader = VZLinuxBootLoader(kernelURL: kernel.path)
+            loader.commandLine = kernel.linuxCommandline(initialFilesystem: initialFilesystem)
+            config.bootLoader = loader
+        }
 
         try initialFilesystem.configure(config: &config)
 
