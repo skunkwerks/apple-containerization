@@ -17,6 +17,7 @@
 import ArgumentParser
 import Containerization
 import ContainerizationError
+import ContainerizationExtras
 import ContainerizationOS
 import Foundation
 
@@ -63,10 +64,33 @@ extension Application {
             help: "Run a command in the guest via the virtio-console agent, print its output, then stop")
         var exec: String?
 
+        @Option(
+            name: .customLong("network"),
+            help: "Network mode: 'none' (default) or 'nat' (VZ NAT + DHCP, lets the guest reach the internet, e.g. for podman pull)")
+        var network: String = "none"
+
         func run() async throws {
             let bootDiskURL = URL(fileURLWithPath: bootDisk).absoluteURL
             guard FileManager.default.fileExists(atPath: bootDiskURL.path) else {
                 throw ContainerizationError(.notFound, message: "boot disk not found: \(bootDiskURL.path)")
+            }
+
+            // VZ NAT runs its own DHCP server; the guest gets its address that way
+            // (the agent reports it back). The CIDR/gateway below are required by the
+            // NATInterface initializer but are not applied to the VZ device — only the
+            // MAC is — so they serve purely as a sane placeholder.
+            let interface: NATInterface?
+            switch network.lowercased() {
+            case "none":
+                interface = nil
+            case "nat":
+                interface = NATInterface(
+                    ipv4Address: try CIDRv4("192.168.64.2/24"),
+                    ipv4Gateway: try IPv4Address("192.168.64.1")
+                )
+            default:
+                throw ContainerizationError(
+                    .invalidArgument, message: "unknown --network mode '\(network)' (expected 'none' or 'nat')")
             }
 
             let efiStoreURL =
@@ -84,6 +108,7 @@ extension Application {
                     "bootLog": "\(bootLogURL.path)",
                     "cpus": "\(cpus)",
                     "memoryMB": "\(memory)",
+                    "network": "\(network)",
                 ])
 
             // When --exec is requested, attach a virtio-console agent channel via
@@ -102,6 +127,7 @@ extension Application {
                     destination: "/"
                 )
                 config.bootLog = .file(path: bootLogURL)
+                if let interface { config.interfaces.append(interface) }
                 if let agentExt { config.extensions.append(agentExt) }
             }
 
