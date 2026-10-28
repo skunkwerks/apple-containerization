@@ -23,6 +23,7 @@ public struct SystemPlatform: Sendable, Codable {
     public enum OS: String, CaseIterable, Sendable, Codable {
         case linux
         case darwin
+        case freebsd
     }
     public let os: OS
 
@@ -38,4 +39,5 @@ public struct SystemPlatform: Sendable, Codable {
 
     public static var linuxArm: SystemPlatform { .init(os: .linux, architecture: .arm64) }
     public static var linuxAmd: SystemPlatform { .init(os: .linux, architecture: .amd64) }
+    public static var freebsdArm: SystemPlatform { .init(os: .freebsd, architecture: .arm64) }
 }
